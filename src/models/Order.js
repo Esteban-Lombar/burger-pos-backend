@@ -1,32 +1,17 @@
-// src/models/Order.js
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const burgerConfigSchema = new mongoose.Schema(
   {
-    // Número de carnes de la hamburguesa
-    meatQty: { type: Number, default: 1 },
-
-    // Tipo de carne (por si luego quieres "res", "pollo", etc.)
-    meatType: { type: String, default: 'carne' },
-
-    // Tocineta base del producto: asada / caramelizada / ninguna
-    baconType: { type: String, default: 'asada' },
-
-    // Adición extra de tocineta
-    extraBacon: { type: Boolean, default: false },
-
-    // Opciones de lechuga: normal | wrap | sin
-    lettuceOption: { type: String, default: 'normal' },
-
-    // Verduras
+    meatType: { type: String, default: "carne" },      // tipo general
+    meatQty: { type: Number, default: 1 },             // nº de carnes
+    baconType: { type: String, default: "asada" },     // asada | caramelizada
+    extraBacon: { type: Boolean, default: false },     // adición de tocineta
+    extraCheese: { type: Boolean, default: false },    // adición de queso
+    lettuceOption: { type: String, default: "normal" },// normal | wrap | sin
     tomato: { type: Boolean, default: true },
     onion: { type: Boolean, default: true },
-
-    // Si el cliente dijo “sin verduras”
     noVeggies: { type: Boolean, default: false },
-
-    // Nota libre para cocina
-    notes: { type: String, default: '' },
+    notes: { type: String, default: "" },              // notas para cocina
   },
   { _id: false }
 );
@@ -35,28 +20,25 @@ const orderItemSchema = new mongoose.Schema(
   {
     product: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Product',
+      ref: "Product",
       required: true,
     },
     productName: String,
     productCode: String,
 
-    // Cuántas hamburguesas de ese tipo
     quantity: { type: Number, required: true },
 
-    // Combo y papas extra
-    includesFries: { type: Boolean, default: false },
-    extraFriesQty: { type: Number, default: 0 },
+    // Extras de combo
+    includesFries: { type: Boolean, default: false },  // combo con papas
+    extraFriesQty: { type: Number, default: 0 },       // adición de papas
+    drinkCode: { type: String, default: "none" },      // none | coca | coca_zero
 
-    // Código de bebida: none | coca | coca_zero | etc.
-    drinkCode: { type: String, default: 'none' },
-
-    // Configuración detallada de la hamburguesa
+    // Config específica de la hamburguesa
     burgerConfig: burgerConfigSchema,
 
     // Precios
-    unitPrice: { type: Number, default: 0 },
-    totalPrice: { type: Number, default: 0 },
+    unitPrice: Number,   // precio por hamburguesa con sus extras
+    totalPrice: Number,  // unitPrice * quantity
   },
   { _id: false }
 );
@@ -65,18 +47,15 @@ const orderSchema = new mongoose.Schema(
   {
     tableNumber: { type: Number, default: null },
     toGo: { type: Boolean, default: false },
-
     status: {
       type: String,
-      enum: ['pendiente', 'preparando', 'listo', 'pagado', 'cancelado'],
-      default: 'pendiente',
+      enum: ["pendiente", "preparando", "listo", "pagado", "cancelado"],
+      default: "pendiente",
     },
-
     items: [orderItemSchema],
-
-    total: { type: Number, default: 0 },
+    total: { type: Number, default: 0 }, // suma de totalPrice de items
   },
   { timestamps: true }
 );
 
-export const Order = mongoose.model('Order', orderSchema);
+export const Order = mongoose.model("Order", orderSchema);

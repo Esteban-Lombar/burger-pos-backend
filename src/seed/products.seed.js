@@ -6,7 +6,7 @@ const productsData = [
     name: "Hamburguesa con tocineta asada",
     type: "burger",
     code: "HB-ASADA", // Código único
-    price: 16000,
+    price: 18000,
     options: {
       carne: true,
       lechuga: true,
