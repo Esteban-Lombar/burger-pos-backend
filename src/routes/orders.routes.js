@@ -3,6 +3,7 @@ import { Order } from "../models/Order.js";
 
 const router = Router();
 
+
 /**
  * Crear una nueva orden (mesero)
  */
@@ -179,5 +180,32 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ error: "Error editando la orden" });
   }
 });
+
+/**
+ * 🧹 Borrar órdenes del día de hoy (solo en pruebas)
+ * DELETE /api/orders/clear-today
+ */
+router.delete("/clear-today", async (req, res) => {
+  try {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const result = await Order.deleteMany({
+      createdAt: { $gte: start, $lte: end }
+    });
+
+    res.json({
+      message: "Órdenes del día actual eliminadas",
+      totalEliminadas: result.deletedCount
+    });
+  } catch (error) {
+    console.error("❌ Error borrando órdenes de hoy:", error);
+    res.status(500).json({ error: "Error borrando órdenes" });
+  }
+});
+
 
 export default router;
