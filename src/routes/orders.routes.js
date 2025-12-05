@@ -1,4 +1,3 @@
-// src/routes/orders.routes.js
 import { Router } from "express";
 import { Order } from "../models/Order.js";
 
@@ -12,18 +11,14 @@ router.post("/", async (req, res) => {
     const { tableNumber, toGo, items } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "La orden debe tener al menos un ítem" });
+      return res.status(400).json({ error: "La orden debe tener al menos un ítem" });
     }
 
-    // Calcular total por seguridad en el backend
     const total = items.reduce((sum, item) => {
-      const unit = Number(item.unitPrice) || 0;
-      const qty = Number(item.quantity) || 1;
-      const lineTotal =
-        item.totalPrice != null ? Number(item.totalPrice) : unit * qty;
-      return sum + lineTotal;
+      if (item.totalPrice != null) return sum + item.totalPrice;
+      const unit = item.unitPrice || 0;
+      const qty = item.quantity || 1;
+      return sum + unit * qty;
     }, 0);
 
     const newOrder = await Order.create({
@@ -62,7 +57,7 @@ router.get("/", async (req, res) => {
 });
 
 /**
- * Pedidos pendientes (atajo para cocina)
+ * Pedidos pendientes (alternativa para cocina)
  * GET /api/orders/pending
  */
 router.get("/pending", async (req, res) => {
@@ -74,9 +69,36 @@ router.get("/pending", async (req, res) => {
     res.json(pendingOrders);
   } catch (error) {
     console.error("❌ Error obteniendo pedidos pendientes:", error);
-    res
-      .status(500)
-      .json({ error: "Error obteniendo pedidos pendientes" });
+    res.status(500).json({ error: "Error obteniendo pedidos pendientes" });
+  }
+});
+
+/**
+ * Resumen del día para cierre de caja
+ */
+router.get("/today/summary", async (req, res) => {
+  try {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const todayOrders = await Order.find({
+      createdAt: { $gte: start, $lte: end },
+      status: { $in: ["listo", "pagado"] },
+    });
+
+    const total = todayOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+
+    res.json({
+      total,
+      numOrders: todayOrders.length,
+      orders: todayOrders,
+    });
+  } catch (error) {
+    console.error("❌ Error obteniendo resumen del día:", error);
+    res.status(500).json({ error: "Error obteniendo resumen del día" });
   }
 });
 
@@ -88,11 +110,7 @@ router.put("/:id/status", async (req, res) => {
   try {
     const { status } = req.body;
 
-    if (
-      !["pendiente", "preparando", "listo", "pagado", "cancelado"].includes(
-        status
-      )
-    ) {
+    if (!["pendiente", "preparando", "listo", "pagado", "cancelado"].includes(status)) {
       return res.status(400).json({ error: "Estado inválido" });
     }
 
@@ -114,45 +132,51 @@ router.put("/:id/status", async (req, res) => {
 });
 
 /**
- * Resumen del día para cierre de caja
- * GET /api/orders/today/summary
- * Opcional: ?date=YYYY-MM-DD -> trae ese día en específico
+ * Editar datos básicos de la orden (ej: mesa, para llevar, items)
+ * PUT /api/orders/:id
  */
-router.get("/today/summary", async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
-    const { date } = req.query;
+    const { tableNumber, toGo, items } = req.body;
 
-    let start, end;
+    const update = {};
 
-    if (date) {
-      // date viene como "2025-12-01"
-      const [year, month, day] = date.split("-").map(Number);
-      start = new Date(year, month - 1, day, 0, 0, 0, 0);
-      end = new Date(year, month - 1, day, 23, 59, 59, 999);
-    } else {
-      // por defecto: hoy
-      start = new Date();
-      start.setHours(0, 0, 0, 0);
-
-      end = new Date();
-      end.setHours(23, 59, 59, 999);
+    if (tableNumber !== undefined) {
+      update.tableNumber =
+        tableNumber === null || tableNumber === "" ? null : Number(tableNumber);
     }
 
-    const dayOrders = await Order.find({
-      createdAt: { $gte: start, $lte: end },
-      status: { $in: ["listo", "pagado"] },
-    }).sort({ createdAt: 1 });
+    if (toGo !== undefined) {
+      update.toGo = !!toGo;
+      // si es para llevar, mesa queda null
+      if (update.toGo) {
+        update.tableNumber = null;
+      }
+    }
 
-    const total = dayOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+    // si mandas items, recalculamos total en el back
+    if (items && Array.isArray(items) && items.length > 0) {
+      update.items = items;
+      update.total = items.reduce((sum, item) => {
+        if (item.totalPrice != null) return sum + item.totalPrice;
+        const unit = item.unitPrice || 0;
+        const qty = item.quantity || 1;
+        return sum + unit * qty;
+      }, 0);
+    }
 
-    res.json({
-      total,
-      numOrders: dayOrders.length,
-      orders: dayOrders,
+    const order = await Order.findByIdAndUpdate(req.params.id, update, {
+      new: true,
     });
+
+    if (!order) {
+      return res.status(404).json({ error: "Orden no encontrada" });
+    }
+
+    res.json(order);
   } catch (error) {
-    console.error("❌ Error obteniendo resumen del día:", error);
-    res.status(500).json({ error: "Error obteniendo resumen del día" });
+    console.error("❌ Error editando la orden:", error);
+    res.status(500).json({ error: "Error editando la orden" });
   }
 });
 
