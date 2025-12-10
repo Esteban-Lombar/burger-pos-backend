@@ -3,7 +3,6 @@ import { Order } from "../models/Order.js";
 
 const router = Router();
 
-
 /**
  * Crear una nueva orden (mesero)
  */
@@ -12,7 +11,9 @@ router.post("/", async (req, res) => {
     const { tableNumber, toGo, items } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "La orden debe tener al menos un ítem" });
+      return res
+        .status(400)
+        .json({ error: "La orden debe tener al menos un ítem" });
     }
 
     const total = items.reduce((sum, item) => {
@@ -76,26 +77,50 @@ router.get("/pending", async (req, res) => {
 
 /**
  * Resumen del día para cierre de caja
+ * GET /api/orders/today/summary?date=YYYY-MM-DD
+ *
+ * - Si NO envías date: usa la fecha de HOY del servidor.
+ * - Cuenta TODOS los pedidos de ese día (cualquier estado).
+ *   Luego tú puedes decidir si solo miras listo/pagado.
  */
 router.get("/today/summary", async (req, res) => {
   try {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    const { date } = req.query; // YYYY-MM-DD opcional
 
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+    let start;
+    let end;
 
-    const todayOrders = await Order.find({
+    if (date) {
+      // Construimos el rango de esa fecha específica
+      // Interpretado en la zona horaria del servidor.
+      const [year, month, day] = date.split("-").map(Number);
+      start = new Date(year, month - 1, day, 0, 0, 0, 0);
+      end = new Date(year, month - 1, day, 23, 59, 59, 999);
+    } else {
+      // Hoy
+      start = new Date();
+      start.setHours(0, 0, 0, 0);
+
+      end = new Date();
+      end.setHours(23, 59, 59, 999);
+    }
+
+    // 🔎 Traemos TODOS los pedidos del día (cualquier estado)
+    const dayOrders = await Order.find({
       createdAt: { $gte: start, $lte: end },
-      status: { $in: ["listo", "pagado"] },
-    });
+    }).sort({ createdAt: 1 });
 
-    const total = todayOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+    // 💵 Para el TOTAL de caja tomamos solo listo + pagado
+    const validForCash = dayOrders.filter((o) =>
+      ["listo", "pagado"].includes(o.status)
+    );
+
+    const total = validForCash.reduce((sum, o) => sum + (o.total || 0), 0);
 
     res.json({
-      total,
-      numOrders: todayOrders.length,
-      orders: todayOrders,
+      total, // suma de listo + pagado
+      numOrders: validForCash.length, // cantidad de listo + pagado
+      orders: dayOrders, // 👈 en el detalle mandamos TODOS los pedidos de ese día
     });
   } catch (error) {
     console.error("❌ Error obteniendo resumen del día:", error);
@@ -109,9 +134,21 @@ router.get("/today/summary", async (req, res) => {
  */
 router.put("/:id/status", async (req, res) => {
   try {
-    const { status } = req.body;
+    let { status } = req.body;
 
-    if (!["pendiente", "preparando", "listo", "pagado", "cancelado"].includes(status)) {
+    if (typeof status === "string") {
+      status = status.trim().toLowerCase();
+    }
+
+    const allowedStatuses = [
+      "pendiente",
+      "preparando",
+      "listo",
+      "pagado",
+      "cancelado",
+    ];
+
+    if (!allowedStatuses.includes(status)) {
       return res.status(400).json({ error: "Estado inválido" });
     }
 
@@ -180,7 +217,5 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ error: "Error editando la orden" });
   }
 });
-
-
 
 export default router;
