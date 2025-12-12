@@ -4,6 +4,33 @@ import { Order } from "../models/Order.js";
 const router = Router();
 
 /**
+ * Helper: DateKey (YYYY-MM-DD) en zona horaria Colombia
+ */
+function bogotaDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(date)
+    .split("-");
+  return `${parts[0]}-${parts[1]}-${parts[2]}`;
+}
+
+/**
+ * Helper: recalcular total desde items
+ */
+function calcTotal(items = []) {
+  return items.reduce((sum, item) => {
+    const qty = Number(item.quantity) || 1;
+    const unit = Number(item.unitPrice) || 0;
+    const line = item.totalPrice != null ? Number(item.totalPrice) : unit * qty;
+    return sum + (Number.isFinite(line) ? line : 0);
+  }, 0);
+}
+
+/**
  * Crear una nueva orden (mesero)
  */
 router.post("/", async (req, res) => {
@@ -16,19 +43,26 @@ router.post("/", async (req, res) => {
         .json({ error: "La orden debe tener al menos un ítem" });
     }
 
-    const total = items.reduce((sum, item) => {
-      if (item.totalPrice != null) return sum + item.totalPrice;
-      const unit = item.unitPrice || 0;
-      const qty = item.quantity || 1;
-      return sum + unit * qty;
-    }, 0);
+    // Normaliza items (por si viene extraDrinkQty)
+    const cleanItems = items.map((it) => ({
+      ...it,
+      quantity: Number(it.quantity) || 1,
+      extraFriesQty: Number(it.extraFriesQty) || 0,
+      extraDrinkQty: Number(it.extraDrinkQty) || 0, // ✅ NUEVO
+      unitPrice: Number(it.unitPrice) || 0,
+      totalPrice: Number(it.totalPrice) || 0,
+    }));
 
+    const total = calcTotal(cleanItems);
+
+    const now = new Date();
     const newOrder = await Order.create({
       tableNumber: tableNumber ?? null,
       toGo: !!toGo,
-      items,
+      items: cleanItems,
       total,
-      // status usa el default del schema: "pendiente"
+      // ✅ clave del día en hora Colombia para consultas por día
+      createdDateKey: bogotaDateKey(now),
     });
 
     res.status(201).json(newOrder);
@@ -40,17 +74,16 @@ router.post("/", async (req, res) => {
 
 /**
  * Listar órdenes, opcionalmente filtradas por status
- * Ejemplo: GET /api/orders?status=pendiente
+ * GET /api/orders?status=pendiente
  */
 router.get("/", async (req, res) => {
   try {
     const { status } = req.query;
 
     const filter = {};
-    if (status) filter.status = status; // pendiente, preparando, listo, etc.
+    if (status) filter.status = status;
 
     const orders = await Order.find(filter).sort({ createdAt: 1 });
-
     res.json(orders);
   } catch (error) {
     console.error("❌ Error obteniendo órdenes:", error);
@@ -59,7 +92,7 @@ router.get("/", async (req, res) => {
 });
 
 /**
- * Pedidos pendientes (alternativa para cocina)
+ * Pedidos pendientes (cocina)
  * GET /api/orders/pending
  */
 router.get("/pending", async (req, res) => {
@@ -76,51 +109,50 @@ router.get("/pending", async (req, res) => {
 });
 
 /**
- * Resumen del día para cierre de caja
- * GET /api/orders/today/summary?date=YYYY-MM-DD
+ * ✅ PUNTO B: Resumen del día para cierre de caja (sin errores por zona horaria)
  *
- * - Si NO envías date: usa la fecha de HOY del servidor.
- * - Cuenta TODOS los pedidos de ese día (cualquier estado).
- *   Luego tú puedes decidir si solo miras listo/pagado.
+ * GET /api/orders/today/summary?date=YYYY-MM-DD&by=completed|paid|created
+ *
+ * - by=completed (DEFAULT): cuenta ventas por cuando cocina puso LISTO (lo que tú pediste)
+ * - by=paid: cuenta ventas por cuando caja puso PAGADO
+ * - by=created: por fecha de creación (no recomendado para caja, pero se deja)
  */
 router.get("/today/summary", async (req, res) => {
   try {
-    const { date } = req.query; // YYYY-MM-DD opcional
+    const { date, by } = req.query;
 
-    let start;
-    let end;
+    const mode = (by || "completed").toString().trim().toLowerCase();
+    const dayKey = date ? String(date) : bogotaDateKey(new Date());
 
-    if (date) {
-      // Construimos el rango de esa fecha específica
-      // Interpretado en la zona horaria del servidor.
-      const [year, month, day] = date.split("-").map(Number);
-      start = new Date(year, month - 1, day, 0, 0, 0, 0);
-      end = new Date(year, month - 1, day, 23, 59, 59, 999);
-    } else {
-      // Hoy
-      start = new Date();
-      start.setHours(0, 0, 0, 0);
+    let keyField = "completedDateKey";
+    if (mode === "paid") keyField = "paidDateKey";
+    if (mode === "created") keyField = "createdDateKey";
 
-      end = new Date();
-      end.setHours(23, 59, 59, 999);
+    // Traemos órdenes del día según el modo
+    const dayOrders = await Order.find({ [keyField]: dayKey }).sort({
+      createdAt: 1,
+    });
+
+    // Total recomendado:
+    // - completed: suma de pedidos que ya están LISTO o PAGADO
+    // - paid: suma solo PAGADO
+    // - created: suma de TODOS (útil para auditoría, no para caja)
+    let validForCash = dayOrders;
+
+    if (mode === "completed") {
+      validForCash = dayOrders.filter((o) => ["listo", "pagado"].includes(o.status));
+    } else if (mode === "paid") {
+      validForCash = dayOrders.filter((o) => o.status === "pagado");
     }
-
-    // 🔎 Traemos TODOS los pedidos del día (cualquier estado)
-    const dayOrders = await Order.find({
-      createdAt: { $gte: start, $lte: end },
-    }).sort({ createdAt: 1 });
-
-    // 💵 Para el TOTAL de caja tomamos solo listo + pagado
-    const validForCash = dayOrders.filter((o) =>
-      ["listo", "pagado"].includes(o.status)
-    );
 
     const total = validForCash.reduce((sum, o) => sum + (o.total || 0), 0);
 
     res.json({
-      total, // suma de listo + pagado
-      numOrders: validForCash.length, // cantidad de listo + pagado
-      orders: dayOrders, // 👈 en el detalle mandamos TODOS los pedidos de ese día
+      date: dayKey,
+      by: mode,
+      total,
+      numOrders: validForCash.length,
+      orders: dayOrders, // manda todas las del día (para listado / auditoría)
     });
   } catch (error) {
     console.error("❌ Error obteniendo resumen del día:", error);
@@ -131,6 +163,10 @@ router.get("/today/summary", async (req, res) => {
 /**
  * Actualizar estado de una orden
  * PUT /api/orders/:id/status  { status: "listo" }
+ *
+ * ✅ AQUÍ se guardan las fechas reales para cierre:
+ * - listo  -> completedAt + completedDateKey (hora Colombia)
+ * - pagado -> paidAt + paidDateKey (hora Colombia)
  */
 router.put("/:id/status", async (req, res) => {
   try {
@@ -152,11 +188,29 @@ router.put("/:id/status", async (req, res) => {
       return res.status(400).json({ error: "Estado inválido" });
     }
 
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
+    const now = new Date();
+    const update = { status };
+
+    // ✅ si pasa a LISTO, sellamos completedAt (si no estaba)
+    if (status === "listo") {
+      update.completedAt = now;
+      update.completedDateKey = bogotaDateKey(now);
+    }
+
+    // ✅ si pasa a PAGADO, sellamos paidAt
+    if (status === "pagado") {
+      update.paidAt = now;
+      update.paidDateKey = bogotaDateKey(now);
+
+      // Si por alguna razón nunca lo marcaron listo antes,
+      // lo sellamos también para no perderlo en cierres por "completed"
+      update.completedAt = update.completedAt || now;
+      update.completedDateKey = update.completedDateKey || bogotaDateKey(now);
+    }
+
+    const order = await Order.findByIdAndUpdate(req.params.id, update, {
+      new: true,
+    });
 
     if (!order) {
       return res.status(404).json({ error: "Orden no encontrada" });
@@ -170,7 +224,7 @@ router.put("/:id/status", async (req, res) => {
 });
 
 /**
- * Editar datos básicos de la orden (ej: mesa, para llevar, items)
+ * Editar datos básicos de la orden (mesa, para llevar, items)
  * PUT /api/orders/:id
  */
 router.put("/:id", async (req, res) => {
@@ -186,21 +240,22 @@ router.put("/:id", async (req, res) => {
 
     if (toGo !== undefined) {
       update.toGo = !!toGo;
-      // si es para llevar, mesa queda null
-      if (update.toGo) {
-        update.tableNumber = null;
-      }
+      if (update.toGo) update.tableNumber = null;
     }
 
-    // si mandas items, recalculamos total en el back
-    if (items && Array.isArray(items) && items.length > 0) {
-      update.items = items;
-      update.total = items.reduce((sum, item) => {
-        if (item.totalPrice != null) return sum + item.totalPrice;
-        const unit = item.unitPrice || 0;
-        const qty = item.quantity || 1;
-        return sum + unit * qty;
-      }, 0);
+    if (items && Array.isArray(items)) {
+      // permitimos incluso array vacío si quieres (no obligatorio)
+      const cleanItems = items.map((it) => ({
+        ...it,
+        quantity: Number(it.quantity) || 1,
+        extraFriesQty: Number(it.extraFriesQty) || 0,
+        extraDrinkQty: Number(it.extraDrinkQty) || 0, // ✅ NUEVO
+        unitPrice: Number(it.unitPrice) || 0,
+        totalPrice: Number(it.totalPrice) || 0,
+      }));
+
+      update.items = cleanItems;
+      update.total = calcTotal(cleanItems);
     }
 
     const order = await Order.findByIdAndUpdate(req.params.id, update, {
