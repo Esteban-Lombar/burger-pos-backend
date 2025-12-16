@@ -1,7 +1,10 @@
-import Product from "../models/Product.js";  // 👈 import default
+import Product from "../models/Product.js"; // 👈 import default
 
 // Productos iniciales
 const productsData = [
+  // =========================
+  // 🍔 HAMBURGUESAS
+  // =========================
   {
     name: "Hamburguesa con tocineta asada",
     type: "burger",
@@ -30,30 +33,49 @@ const productsData = [
     },
     active: true,
   },
+
+  // =========================
+  // 🍟 ACOMPAÑAMIENTOS
+  // =========================
+  {
+    name: "Papas (solo)",
+    type: "side",
+    code: "papas", // ⚠️ este code es el que usa el frontend
+    price: 5000,
+    options: {},
+    active: true,
+  },
+  {
+    name: "Papas chessbeicon",
+    type: "side",
+    code: "papas_chessbeicon", // ⚠️ este code es CLAVE
+    price: 10000,
+    options: {},
+    active: true,
+  },
 ];
 
 export async function seedProducts(req, res) {
   console.log("Ejecutando seed de productos...");
 
   try {
-    // Limpia productos anteriores
+    // 🧹 Limpia productos anteriores
     await Product.deleteMany({});
 
-    // Inserta los productos
+    // 🌱 Inserta los productos
     await Product.insertMany(productsData);
 
     console.log("Seed ejecutado con éxito");
-    return res
-      .status(200)
-      .json({
-        ok: true,
-        message: "Productos cargados correctamente",
-        count: productsData.length,
-      });
+    return res.status(200).json({
+      ok: true,
+      message: "Productos cargados correctamente",
+      count: productsData.length,
+    });
   } catch (error) {
     console.error("Error ejecutando seed de productos:", error);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Error ejecutando seed de productos" });
+    return res.status(500).json({
+      ok: false,
+      error: "Error ejecutando seed de productos",
+    });
   }
 }
